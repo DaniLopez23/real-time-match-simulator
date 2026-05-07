@@ -27,7 +27,7 @@ services:
   producer:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.producer
     container_name: kafka-producer
     depends_on:
       kafka:
@@ -43,7 +43,7 @@ services:
   streaming:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.streaming
     container_name: spark-streaming
     depends_on:
       kafka:
@@ -51,6 +51,10 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_TOPIC: match_events
+      REPORT_WINDOW_MINUTES: 2
+      SNAPSHOT_INTERVAL_SECONDS: 30
+      REPORT_GENERATION_ENABLED: "true"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       PYTHONUNBUFFERED: "1"
     volumes:
       - .:/app
@@ -59,7 +63,7 @@ services:
   dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.dashboard
     container_name: streamlit-dashboard
     depends_on:
       kafka:
