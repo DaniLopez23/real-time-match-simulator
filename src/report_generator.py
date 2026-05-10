@@ -12,8 +12,9 @@ from incremental_report import load_incremental_segments, load_window_metrics
 from settings import EVENTS_FILE, METRICS_FILE, REPORT_WINDOW_MINUTES
 
 try:
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
     from reportlab.graphics.charts.linecharts import HorizontalLineChart
-    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics.shapes import Drawing, String
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -23,6 +24,30 @@ try:
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
+
+
+EVENT_TYPE_METRICS = [
+    ("passes", "Pase"),
+    ("carries", "Conduccion"),
+    ("dribbles", "Regate"),
+    ("shots", "Tiro"),
+    ("pressures", "Presion"),
+    ("duels", "Duelo"),
+    ("interceptions", "Intercepcion"),
+    ("blocks", "Bloqueo"),
+    ("clearances", "Despeje"),
+]
+CHART_COLORS = [
+    "#1F4E79",
+    "#D95D39",
+    "#58A4B0",
+    "#7A5195",
+    "#2F855A",
+    "#C0841A",
+    "#6B7280",
+    "#B83280",
+    "#2B6CB0",
+]
 
 
 def _clean_text(value: Any) -> str:
@@ -48,6 +73,20 @@ def generate_report(metrics: dict, rag_context: str, workflow_output: dict) -> s
 def _add_section(story: list, styles: dict, title: str, body: str) -> None:
     story.append(Paragraph(title, styles["SectionTitle"]))
     story.append(Paragraph(_clean_text(body), styles["Body"]))
+    story.append(Spacer(1, 0.28 * cm))
+
+
+def _add_segment_section(story: list, styles: dict, row: Any) -> None:
+    start = int(row.window_start_minute)
+    end = int(row.window_end_minute)
+    story.append(Paragraph(f"Minutos {start}-{end}", styles["SectionTitle"]))
+    story.append(Paragraph(_clean_text(row.text), styles["Body"]))
+    source_text = (
+        f"Fuente: datos de eventos y metricas Spark de la ventana {start}-{end}, "
+        "mas contexto RAG incremental construido con las ventanas procesadas. "
+        "El texto procede del flujo de agentes y LLM que resume los datos de esa ventana."
+    )
+    story.append(Paragraph(_clean_text(source_text), styles["Trace"]))
     story.append(Spacer(1, 0.28 * cm))
 
 
@@ -121,41 +160,140 @@ def _build_window_metrics_table(window_metrics_df) -> Table:
     return table
 
 
-def _build_window_activity_chart(window_metrics_df) -> Drawing | None:
-    if window_metrics_df.empty:
+def _chart_color(index: int):
+    return colors.HexColor(CHART_COLORS[index % len(CHART_COLORS)])
+
+
+def _build_event_distribution_chart(metrics: dict[str, Any]) -> Drawing | None:
+    teams = metrics.get("teams", [])
+    if not teams:
         return None
 
-    grouped = (
-        window_metrics_df.groupby("window_start_minute", as_index=False)
-        .agg(
-            events=("events", "sum"),
-            offensive_index=("offensive_index", "sum"),
-            defensive_index=("defensive_index", "sum"),
-        )
-        .sort_values("window_start_minute")
-    )
-    if grouped.empty:
-        return None
-
-    drawing = Drawing(460, 190)
-    chart = HorizontalLineChart()
-    chart.x = 45
-    chart.y = 35
-    chart.height = 120
-    chart.width = 380
+    drawing = Drawing(500, 230)
+    chart = VerticalBarChart()
+    chart.x = 42
+    chart.y = 42
+    chart.height = 130
+    chart.width = 420
     chart.data = [
-        grouped["events"].astype(float).tolist(),
-        grouped["offensive_index"].astype(float).tolist(),
-        grouped["defensive_index"].astype(float).tolist(),
+        [float(team.get(column, 0)) for column, _ in EVENT_TYPE_METRICS]
+        for team in teams
     ]
-    chart.categoryAxis.categoryNames = [str(int(value)) for value in grouped["window_start_minute"]]
+    chart.categoryAxis.categoryNames = [label for _, label in EVENT_TYPE_METRICS]
+    chart.categoryAxis.labels.angle = 28
+    chart.categoryAxis.labels.fontSize = 6
     chart.valueAxis.valueMin = 0
     chart.valueAxis.valueMax = max(max(series) for series in chart.data) + 2
     chart.valueAxis.valueStep = max(int(chart.valueAxis.valueMax // 4), 1)
-    chart.lines[0].strokeColor = colors.HexColor("#1F4E79")
-    chart.lines[1].strokeColor = colors.HexColor("#58A4B0")
-    chart.lines[2].strokeColor = colors.HexColor("#D95D39")
+    for index, _team in enumerate(teams):
+        chart.bars[index].fillColor = _chart_color(index)
     drawing.add(chart)
+    drawing.add(String(42, 200, "Distribucion de eventos por equipo", fontName="Helvetica-Bold", fontSize=10))
+    for index, team in enumerate(teams):
+        drawing.add(
+            String(
+                42 + (index * 160),
+                184,
+                f"{team.get('team', 'N/D')}",
+                fontSize=8,
+                fillColor=_chart_color(index),
+            )
+        )
+    return drawing
+
+
+def _line_chart(
+    data: list[list[float]],
+    categories: list[str],
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> HorizontalLineChart:
+    chart = HorizontalLineChart()
+    chart.x = x
+    chart.y = y
+    chart.height = height
+    chart.width = width
+    chart.data = data
+    chart.categoryAxis.categoryNames = categories
+    chart.categoryAxis.labels.fontSize = 6
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.valueMax = max(max(series) for series in data) + 2 if data else 2
+    chart.valueAxis.valueStep = max(int(chart.valueAxis.valueMax // 4), 1)
+    for index in range(len(data)):
+        chart.lines[index].strokeColor = _chart_color(index)
+        chart.lines[index].strokeWidth = 1
+    return chart
+
+
+def _build_event_type_evolution_chart(window_metrics_df) -> Drawing | None:
+    if window_metrics_df.empty:
+        return None
+
+    teams = sorted(window_metrics_df["team"].dropna().astype(str).unique())
+    if not teams:
+        return None
+
+    team_count = min(len(teams), 2)
+    drawing_height = 155 * team_count + 50
+    drawing = Drawing(500, drawing_height)
+    drawing.add(
+        String(
+            42,
+            drawing_height - 18,
+            "Evolucion por tipo de evento en ventanas de partido",
+            fontName="Helvetica-Bold",
+            fontSize=10,
+        )
+    )
+
+    for team_index, team in enumerate(teams[:2]):
+        team_df = window_metrics_df[window_metrics_df["team"].astype(str) == team].sort_values("window_start_minute")
+        if team_df.empty:
+            continue
+        categories = [str(int(value)) for value in team_df["window_start_minute"]]
+        series = [
+            team_df[column].fillna(0).astype(float).tolist()
+            for column, _label in EVENT_TYPE_METRICS
+            if column in team_df.columns
+        ]
+        if not series:
+            continue
+        y = drawing_height - 150 - (team_index * 155)
+        drawing.add(String(42, y + 118, team, fontName="Helvetica-Bold", fontSize=9))
+        drawing.add(_line_chart(series, categories, 42, y, 410, 95))
+
+    legend_y = 12
+    for index, (_column, label) in enumerate(EVENT_TYPE_METRICS):
+        drawing.add(String(42 + (index % 3) * 145, legend_y + (index // 3) * 10, label, fontSize=6, fillColor=_chart_color(index)))
+    return drawing
+
+
+def _build_offensive_index_evolution_chart(window_metrics_df) -> Drawing | None:
+    if window_metrics_df.empty or "offensive_index" not in window_metrics_df.columns:
+        return None
+
+    teams = sorted(window_metrics_df["team"].dropna().astype(str).unique())
+    categories = sorted(window_metrics_df["window_start_minute"].dropna().astype(int).unique())
+    if not teams or not categories:
+        return None
+
+    data = []
+    for team in teams:
+        team_df = (
+            window_metrics_df[window_metrics_df["team"].astype(str) == team]
+            .set_index("window_start_minute")
+            .sort_index()
+        )
+        data.append([float(team_df["offensive_index"].get(category, 0.0)) for category in categories])
+
+    drawing = Drawing(500, 210)
+    drawing.add(String(42, 190, "Evolucion del indice ofensivo por equipo", fontName="Helvetica-Bold", fontSize=10))
+    chart = _line_chart(data, [str(value) for value in categories], 42, 45, 410, 120)
+    drawing.add(chart)
+    for index, team in enumerate(teams):
+        drawing.add(String(42 + (index * 160), 20, team, fontSize=8, fillColor=_chart_color(index)))
     return drawing
 
 
@@ -288,8 +426,7 @@ def _evolution_summary(metrics: dict[str, Any], segments_df: pd.DataFrame) -> st
         f"acumulado es {top_offensive.get('team', 'N/D')} "
         f"({float(top_offensive.get('offensive_index', 0)):.1f}), mientras que el mayor "
         f"indice defensivo corresponde a {top_defensive.get('team', 'N/D')} "
-        f"({float(top_defensive.get('defensive_index', 0)):.1f}). "
-        "Las narrativas proceden de segmentos ya materializados; este PDF no invoca LLM ni RAG."
+        f"({float(top_defensive.get('defensive_index', 0)):.1f})."
     )
 
 
@@ -306,8 +443,8 @@ def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
         "llm_model": "no ejecutado",
         "used_langgraph": False,
         "trace": [
-            "PDF construido desde events/metrics/window_metrics/incremental_segments existentes.",
-            "No se invocaron LLM, RAG ni agentes durante la generacion del PDF.",
+            "El PDF no lo genera el agente: compone metricas, graficas y textos ya existentes.",
+            "Los textos de cada intervalo si proceden del flujo previo de agentes, RAG incremental y LLM.",
         ],
     }
 
@@ -371,7 +508,6 @@ def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
         Paragraph("Informe automatico del partido", styles["Title"]),
         Paragraph(
             "Generado a partir de metricas Spark y narrativas incrementales ya persistidas. "
-            "La construccion del PDF no ejecuta LLM/RAG. "
             f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             styles["Subtitle"],
         ),
@@ -392,25 +528,29 @@ def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
         )
         if not segments_df.empty:
             for row in segments_df.itertuples(index=False):
-                _add_section(
-                    story,
-                    styles,
-                    f"Minutos {int(row.window_start_minute)}-{int(row.window_end_minute)}",
-                    row.text,
-                )
+                _add_segment_section(story, styles, row)
         else:
             _add_section(story, styles, "Segmentos incrementales", "No hay segmentos incrementales generados.")
 
-        chart = _build_window_activity_chart(window_metrics_df)
-        if chart is not None:
-            story.append(Paragraph("5. Grafica de evolucion por ventana", styles["SectionTitle"]))
-            story.append(chart)
+        distribution_chart = _build_event_distribution_chart(metrics)
+        if distribution_chart is not None:
+            story.append(Paragraph("5. Distribucion de eventos por equipo", styles["SectionTitle"]))
+            story.append(distribution_chart)
             story.append(Spacer(1, 0.3 * cm))
-        story.append(Paragraph("6. Metricas por ventana", styles["SectionTitle"]))
-        story.append(_build_window_metrics_table(window_metrics_df))
-        story.append(Spacer(1, 0.3 * cm))
 
-    _add_section(story, styles, "7. Trazabilidad", "<br/>".join(workflow_output.get("trace", [])))
+        event_evolution_chart = _build_event_type_evolution_chart(window_metrics_df)
+        if event_evolution_chart is not None:
+            story.append(Paragraph("6. Evolucion de tipos de evento por equipo", styles["SectionTitle"]))
+            story.append(event_evolution_chart)
+            story.append(Spacer(1, 0.3 * cm))
+
+        offensive_chart = _build_offensive_index_evolution_chart(window_metrics_df)
+        if offensive_chart is not None:
+            story.append(Paragraph("7. Evolucion del indice ofensivo", styles["SectionTitle"]))
+            story.append(offensive_chart)
+            story.append(Spacer(1, 0.3 * cm))
+
+    _add_section(story, styles, "8. Justificacion", "<br/>".join(workflow_output.get("trace", [])))
 
     doc.build(story)
     return buffer.getvalue(), workflow_output
