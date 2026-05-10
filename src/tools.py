@@ -46,7 +46,8 @@ def _load_events() -> pd.DataFrame:
         return df
     df["minute"] = pd.to_numeric(df.get("minute"), errors="coerce").fillna(0).astype(int)
     df["value"] = pd.to_numeric(df.get("value"), errors="coerce").fillna(0).astype(int)
-    df["event_type_norm"] = df.get("event_type", "").astype(str).str.lower()
+    df["event_type_norm"] = df["event_type"].astype(str).str.lower() if "event_type" in df.columns else ""
+    df["outcome_norm"] = df["outcome"].astype(str).str.lower() if "outcome" in df.columns else ""
     return df
 
 
@@ -96,20 +97,39 @@ def compute_match_insights() -> dict[str, Any]:
         }
 
     event_type = events_df.get("event_type_norm", pd.Series(dtype=str))
+    outcome = events_df.get("outcome_norm", pd.Series(dtype=str))
     total_shots = int((event_type == "shot").sum()) if not events_df.empty else 0
     total_fouls = int(event_type.isin(["foul committed", "foul won"]).sum()) if not events_df.empty else 0
-    total_goals = int(((event_type == "goal") | ((event_type == "shot") & (events_df["value"] == 3))).sum())
+    total_goals = int(((event_type == "shot") & (outcome == "goal")).sum())
+    total_passes = int((event_type == "pass").sum()) if not events_df.empty else 0
+    successful_passes = int(((event_type == "pass") & (outcome == "success")).sum()) if not events_df.empty else 0
+    total_duels = int((event_type == "duel").sum()) if not events_df.empty else 0
+    successful_duels = int(((event_type == "duel") & (outcome == "success")).sum()) if not events_df.empty else 0
 
     highlighted_team = {}
-    recovery_team = {}
+    defensive_team = {}
     if not latest_metrics.empty:
-        numeric_cols = ["total_events", "goals", "shots", "passes", "fouls", "recoveries"]
+        numeric_cols = [
+            "total_events",
+            "goals",
+            "shots",
+            "passes",
+            "successful_passes",
+            "pass_success_pct",
+            "duels",
+            "successful_duels",
+            "duel_success_pct",
+            "offensive_index",
+            "defensive_index",
+        ]
         for column in numeric_cols:
-            latest_metrics[column] = pd.to_numeric(latest_metrics.get(column), errors="coerce").fillna(0)
+            if column not in latest_metrics.columns:
+                latest_metrics[column] = 0
+            latest_metrics[column] = pd.to_numeric(latest_metrics[column], errors="coerce").fillna(0)
         highlighted_team = latest_metrics.sort_values(
-            ["goals", "shots", "total_events"], ascending=False
+            ["offensive_index", "goals", "shots", "total_events"], ascending=False
         ).iloc[0].to_dict()
-        recovery_team = latest_metrics.sort_values("recoveries", ascending=False).iloc[0].to_dict()
+        defensive_team = latest_metrics.sort_values("defensive_index", ascending=False).iloc[0].to_dict()
 
     highlighted_player = {}
     if not events_df.empty and "player" in events_df.columns:
@@ -118,7 +138,10 @@ def compute_match_insights() -> dict[str, Any]:
             .agg(
                 participations=("event_id", "count"),
                 shots=("event_type_norm", lambda values: (values == "shot").sum()),
-                goals=("value", lambda values: int(((events_df.loc[values.index, "event_type_norm"] == "shot") & (values == 3)).sum())),
+                goals=(
+                    "outcome_norm",
+                    lambda values: int(((events_df.loc[values.index, "event_type_norm"] == "shot") & (values == "goal")).sum()),
+                ),
             )
             .reset_index()
             .sort_values(["goals", "shots", "participations"], ascending=False)
@@ -133,9 +156,15 @@ def compute_match_insights() -> dict[str, Any]:
         "total_shots": total_shots,
         "total_goals": total_goals,
         "total_fouls": total_fouls,
+        "total_passes": total_passes,
+        "successful_passes": successful_passes,
+        "pass_success_pct": round(successful_passes / total_passes * 100, 2) if total_passes else 0.0,
+        "total_duels": total_duels,
+        "successful_duels": successful_duels,
+        "duel_success_pct": round(successful_duels / total_duels * 100, 2) if total_duels else 0.0,
         "teams": latest_metrics.to_dict(orient="records") if not latest_metrics.empty else [],
         "highlighted_team": highlighted_team,
-        "team_with_most_recoveries": recovery_team,
+        "team_with_highest_defensive_index": defensive_team,
         "highlighted_player": highlighted_player,
         "highest_intensity_interval": _intensity(events_df),
     }

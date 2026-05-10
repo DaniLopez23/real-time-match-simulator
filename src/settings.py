@@ -15,10 +15,11 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-REPORT_WINDOW_MINUTES = int(os.getenv("REPORT_WINDOW_MINUTES", "2"))
+REPORT_WINDOW_MINUTES = int(os.getenv("REPORT_WINDOW_MINUTES", "5"))
 
 EVENTS_FILE = PROJECT_ROOT / "output" / "processed" / "events.parquet"
 METRICS_FILE = PROJECT_ROOT / "output" / "aggregates" / "team_metrics.parquet"
 WINDOW_METRICS_FILE = PROJECT_ROOT / "output" / "report_windows" / "window_metrics.parquet"
 INCREMENTAL_SEGMENTS_FILE = PROJECT_ROOT / "output" / "reports" / "incremental_segments.parquet"
+INCREMENTAL_RAG_FILE = PROJECT_ROOT / "output" / "reports" / "incremental_rag.parquet"
 REPORT_PDF_FILE = PROJECT_ROOT / "output" / "reports" / "match_report.pdf"

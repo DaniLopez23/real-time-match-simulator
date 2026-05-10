@@ -6,12 +6,13 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any
 
-from graph_workflow import run_analysis_workflow
-from incremental_report import generate_missing_report_segments, load_incremental_segments, load_window_metrics
-from settings import REPORT_WINDOW_MINUTES
+import pandas as pd
+
+from incremental_report import load_incremental_segments, load_window_metrics
+from settings import EVENTS_FILE, METRICS_FILE, REPORT_WINDOW_MINUTES
 
 try:
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.linecharts import HorizontalLineChart
     from reportlab.graphics.shapes import Drawing
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -52,17 +53,17 @@ def _add_section(story: list, styles: dict, title: str, body: str) -> None:
 
 def _build_metrics_table(metrics: dict) -> Table:
     teams = metrics.get("teams", [])
-    rows = [["Equipo", "Eventos", "Goles", "Tiros", "Pases", "Faltas", "Recup."]]
+    rows = [["Equipo", "Eventos", "Ind. Of.", "Ind. Def.", "% Pase", "% Duelo", "Goles"]]
     for team in teams:
         rows.append(
             [
                 team.get("team", "N/D"),
                 int(team.get("total_events", 0)),
+                float(team.get("offensive_index", 0)),
+                float(team.get("defensive_index", 0)),
+                float(team.get("pass_success_pct", 0)),
+                float(team.get("duel_success_pct", 0)),
                 int(team.get("goals", 0)),
-                int(team.get("shots", 0)),
-                int(team.get("passes", 0)),
-                int(team.get("fouls", 0)),
-                int(team.get("recoveries", 0)),
             ]
         )
 
@@ -86,7 +87,7 @@ def _build_metrics_table(metrics: dict) -> Table:
 
 
 def _build_window_metrics_table(window_metrics_df) -> Table:
-    rows = [["Min.", "Equipo", "Eventos", "Goles", "Tiros", "Pases", "Faltas", "Recup."]]
+    rows = [["Min.", "Equipo", "Eventos", "Ind. Of.", "Ind. Def.", "% Pase", "% Duelo", "Tiros"]]
     if window_metrics_df.empty:
         rows.append(["Sin datos", "N/D", 0, 0, 0, 0, 0, 0])
     else:
@@ -96,11 +97,11 @@ def _build_window_metrics_table(window_metrics_df) -> Table:
                     f"{int(row.window_start_minute)}-{int(row.window_end_minute)}",
                     getattr(row, "team", "N/D"),
                     int(getattr(row, "events", 0)),
-                    int(getattr(row, "goals", 0)),
+                    float(getattr(row, "offensive_index", 0)),
+                    float(getattr(row, "defensive_index", 0)),
+                    float(getattr(row, "pass_success_pct", 0)),
+                    float(getattr(row, "duel_success_pct", 0)),
                     int(getattr(row, "shots", 0)),
-                    int(getattr(row, "passes", 0)),
-                    int(getattr(row, "fouls", 0)),
-                    int(getattr(row, "recoveries", 0)),
                 ]
             )
 
@@ -126,48 +127,189 @@ def _build_window_activity_chart(window_metrics_df) -> Drawing | None:
 
     grouped = (
         window_metrics_df.groupby("window_start_minute", as_index=False)
-        .agg(events=("events", "sum"), shots=("shots", "sum"), recoveries=("recoveries", "sum"))
+        .agg(
+            events=("events", "sum"),
+            offensive_index=("offensive_index", "sum"),
+            defensive_index=("defensive_index", "sum"),
+        )
         .sort_values("window_start_minute")
     )
     if grouped.empty:
         return None
 
     drawing = Drawing(460, 190)
-    chart = VerticalBarChart()
+    chart = HorizontalLineChart()
     chart.x = 45
     chart.y = 35
     chart.height = 120
     chart.width = 380
     chart.data = [
-        grouped["events"].astype(int).tolist(),
-        grouped["shots"].astype(int).tolist(),
-        grouped["recoveries"].astype(int).tolist(),
+        grouped["events"].astype(float).tolist(),
+        grouped["offensive_index"].astype(float).tolist(),
+        grouped["defensive_index"].astype(float).tolist(),
     ]
     chart.categoryAxis.categoryNames = [str(int(value)) for value in grouped["window_start_minute"]]
     chart.valueAxis.valueMin = 0
     chart.valueAxis.valueMax = max(max(series) for series in chart.data) + 2
     chart.valueAxis.valueStep = max(int(chart.valueAxis.valueMax // 4), 1)
-    chart.bars[0].fillColor = colors.HexColor("#1F4E79")
-    chart.bars[1].fillColor = colors.HexColor("#58A4B0")
-    chart.bars[2].fillColor = colors.HexColor("#D95D39")
+    chart.lines[0].strokeColor = colors.HexColor("#1F4E79")
+    chart.lines[1].strokeColor = colors.HexColor("#58A4B0")
+    chart.lines[2].strokeColor = colors.HexColor("#D95D39")
     drawing.add(chart)
     return drawing
 
 
-def generate_pdf_report(include_incremental: bool = False) -> tuple[bytes, dict]:
-    """Run the LangGraph workflow and return the final report as PDF bytes."""
+def _read_parquet(path) -> pd.DataFrame:
+    if not path.exists() or not path.is_file():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _latest_team_metrics() -> pd.DataFrame:
+    df = _read_parquet(METRICS_FILE)
+    if df.empty:
+        return pd.DataFrame()
+    df["snapshot_time"] = pd.to_datetime(df.get("snapshot_time"), errors="coerce")
+    return (
+        df.sort_values(["snapshot_time", "batch_id"])
+        .groupby("team", as_index=False)
+        .tail(1)
+        .sort_values("team")
+    )
+
+
+def _build_artifact_metrics() -> dict[str, Any]:
+    latest_df = _latest_team_metrics()
+    if latest_df.empty:
+        return {"teams": [], "total_events": 0}
+    return {
+        "teams": latest_df.to_dict(orient="records"),
+        "total_events": int(latest_df["total_events"].sum()) if "total_events" in latest_df.columns else 0,
+        "total_goals": int(latest_df["goals"].sum()) if "goals" in latest_df.columns else 0,
+        "total_shots": int(latest_df["shots"].sum()) if "shots" in latest_df.columns else 0,
+    }
+
+
+def _load_events() -> pd.DataFrame:
+    df = _read_parquet(EVENTS_FILE)
+    if df.empty:
+        return df
+    df["event_type_norm"] = df["event_type"].astype(str).str.lower() if "event_type" in df.columns else ""
+    df["outcome_norm"] = df["outcome"].astype(str).str.lower() if "outcome" in df.columns else ""
+    return df
+
+
+def _general_metrics_summary(metrics: dict[str, Any]) -> str:
+    teams = metrics.get("teams", [])
+    if not teams:
+        return "No hay metricas generales suficientes para resumir el partido."
+    top_offensive = max(teams, key=lambda item: item.get("offensive_index", 0), default={})
+    top_defensive = max(teams, key=lambda item: item.get("defensive_index", 0), default={})
+    return (
+        f"El partido acumula {metrics.get('total_events', 0)} eventos, "
+        f"{metrics.get('total_shots', 0)} tiros y {metrics.get('total_goals', 0)} goles. "
+        f"El mayor indice ofensivo corresponde a {top_offensive.get('team', 'N/D')} "
+        f"({float(top_offensive.get('offensive_index', 0)):.1f}) y el mayor indice defensivo a "
+        f"{top_defensive.get('team', 'N/D')} ({float(top_defensive.get('defensive_index', 0)):.1f})."
+    )
+
+
+def _highlighted_player_summary() -> str:
+    events_df = _load_events()
+    if events_df.empty or "player" not in events_df.columns:
+        return "No hay eventos suficientes para identificar un jugador destacado."
+
+    rows: list[dict[str, Any]] = []
+    for (player, team), player_df in events_df.groupby(["player", "team"], dropna=False):
+        event_type = player_df["event_type_norm"]
+        outcome = player_df["outcome_norm"]
+        events = int(len(player_df))
+        shots = int((event_type == "shot").sum())
+        goals = int(((event_type == "shot") & (outcome == "goal")).sum())
+        successful_passes = int(((event_type == "pass") & (outcome == "success")).sum())
+        carries = int((event_type == "carry").sum())
+        successful_dribbles = int(((event_type == "dribble") & (outcome == "success")).sum())
+        pressures = int((event_type == "pressure").sum())
+        duels_won = int(((event_type == "duel") & (outcome == "success")).sum())
+        score = (
+            goals * 8.0
+            + shots * 3.0
+            + successful_dribbles * 1.4
+            + duels_won * 1.2
+            + successful_passes * 0.5
+            + carries * 0.35
+            + pressures * 0.3
+            + events * 0.1
+        )
+        rows.append(
+            {
+                "player": player,
+                "team": team,
+                "events": events,
+                "shots": shots,
+                "goals": goals,
+                "successful_passes": successful_passes,
+                "carries": carries,
+                "successful_dribbles": successful_dribbles,
+                "pressures": pressures,
+                "duels_won": duels_won,
+                "score": score,
+            }
+        )
+
+    if not rows:
+        return "No hay eventos suficientes para identificar un jugador destacado."
+
+    player = max(rows, key=lambda item: item["score"])
+    return (
+        f"Jugador destacado: {player.get('player', 'N/D')} ({player.get('team', 'N/D')}). "
+        f"Se destaca por su volumen e impacto: {player.get('events', 0)} intervenciones, "
+        f"{player.get('successful_passes', 0)} pases exitosos, {player.get('carries', 0)} conducciones, "
+        f"{player.get('successful_dribbles', 0)} regates exitosos, {player.get('shots', 0)} tiros, "
+        f"{player.get('goals', 0)} goles, {player.get('pressures', 0)} presiones y "
+        f"{player.get('duels_won', 0)} duelos ganados."
+    )
+
+
+def _evolution_summary(metrics: dict[str, Any], segments_df: pd.DataFrame) -> str:
+    teams = metrics.get("teams", [])
+    if not teams:
+        return "No hay metricas consolidadas suficientes para resumir la evolucion del partido."
+
+    top_offensive = max(teams, key=lambda item: item.get("offensive_index", 0), default={})
+    top_defensive = max(teams, key=lambda item: item.get("defensive_index", 0), default={})
+    segment_count = 0 if segments_df.empty else len(segments_df)
+    return (
+        f"El informe evolutivo integra {segment_count} ventanas narradas de "
+        f"{REPORT_WINDOW_MINUTES} minutos de partido. El equipo con mayor indice ofensivo "
+        f"acumulado es {top_offensive.get('team', 'N/D')} "
+        f"({float(top_offensive.get('offensive_index', 0)):.1f}), mientras que el mayor "
+        f"indice defensivo corresponde a {top_defensive.get('team', 'N/D')} "
+        f"({float(top_defensive.get('defensive_index', 0)):.1f}). "
+        "Las narrativas proceden de segmentos ya materializados; este PDF no invoca LLM ni RAG."
+    )
+
+
+def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
+    """Build a PDF from already materialized metrics and narrative artifacts."""
     if not REPORTLAB_AVAILABLE:
         raise RuntimeError("La generacion PDF requiere instalar `reportlab`.")
 
-    workflow_output = run_analysis_workflow()
-    metrics = workflow_output.get("metrics", {})
-    sections = workflow_output.get("report_sections", {})
-    rag_context = workflow_output.get("rag_context", "")
+    metrics = _build_artifact_metrics()
     segments_df = load_incremental_segments()
     window_metrics_df = load_window_metrics()
-    if include_incremental:
-        segments_df, _ = generate_missing_report_segments()
-        window_metrics_df = load_window_metrics()
+    workflow_output = {
+        "source": "existing_artifacts",
+        "llm_model": "no ejecutado",
+        "used_langgraph": False,
+        "trace": [
+            "PDF construido desde events/metrics/window_metrics/incremental_segments existentes.",
+            "No se invocaron LLM, RAG ni agentes durante la generacion del PDF.",
+        ],
+    }
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -228,33 +370,25 @@ def generate_pdf_report(include_incremental: bool = False) -> tuple[bytes, dict]
     story = [
         Paragraph("Informe automatico del partido", styles["Title"]),
         Paragraph(
-            "Generado exclusivamente en PDF a partir de metricas Spark, contexto RAG y "
-            f"orquestacion {'LangGraph' if workflow_output.get('used_langgraph') else 'local compatible'} "
-            f"con agents/tools. LLM: {workflow_output.get('llm_model', 'no disponible')}. "
+            "Generado a partir de metricas Spark y narrativas incrementales ya persistidas. "
+            "La construccion del PDF no ejecuta LLM/RAG. "
             f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             styles["Subtitle"],
         ),
     ]
 
-    _add_section(story, styles, "1. Informacion derivada de datos del partido", sections.get("resumen_general", ""))
+    _add_section(story, styles, "1. Metricas generales del partido", _general_metrics_summary(metrics))
+    _add_section(story, styles, "2. Lectura evolutiva", _evolution_summary(metrics, segments_df))
     story.append(_build_metrics_table(metrics))
     story.append(Spacer(1, 0.3 * cm))
-    _add_section(story, styles, "2. Equipo o jugador destacado", sections.get("destacado", ""))
-    _add_section(story, styles, "3. Momento o tramo de mayor intensidad", sections.get("momento_intensidad", ""))
-    _add_section(story, styles, "4. Interpretacion basica del rendimiento", sections.get("interpretacion", ""))
-    _add_section(
-        story,
-        styles,
-        "5. Informacion contextual aportada por documentos recuperados",
-        rag_context,
-    )
-    _add_section(story, styles, "6. Conclusion final para stakeholder no tecnico", sections.get("conclusion", ""))
+    _add_section(story, styles, "3. Jugador destacado", _highlighted_player_summary())
+
     if include_incremental:
         _add_section(
             story,
             styles,
-            f"7. Informe incremental por ventanas de {REPORT_WINDOW_MINUTES} minutos",
-            "Bloques generados de forma incremental a partir de eventos, metricas de ventana y contexto RAG.",
+            f"4. Textos por ventanas de {REPORT_WINDOW_MINUTES} minutos",
+            "Bloques generados previamente a partir de ventanas cerradas de partido.",
         )
         if not segments_df.empty:
             for row in segments_df.itertuples(index=False):
@@ -269,15 +403,14 @@ def generate_pdf_report(include_incremental: bool = False) -> tuple[bytes, dict]
 
         chart = _build_window_activity_chart(window_metrics_df)
         if chart is not None:
-            story.append(Paragraph("Grafica de actividad por ventana", styles["SectionTitle"]))
+            story.append(Paragraph("5. Grafica de evolucion por ventana", styles["SectionTitle"]))
             story.append(chart)
             story.append(Spacer(1, 0.3 * cm))
-        story.append(Paragraph("Metricas por ventana", styles["SectionTitle"]))
+        story.append(Paragraph("6. Metricas por ventana", styles["SectionTitle"]))
         story.append(_build_window_metrics_table(window_metrics_df))
         story.append(Spacer(1, 0.3 * cm))
 
-    trace_title = "8. Trazabilidad LangGraph y tools" if include_incremental else "7. Trazabilidad LangGraph y tools"
-    _add_section(story, styles, trace_title, "<br/>".join(workflow_output.get("trace", [])))
+    _add_section(story, styles, "7. Trazabilidad", "<br/>".join(workflow_output.get("trace", [])))
 
     doc.build(story)
     return buffer.getvalue(), workflow_output

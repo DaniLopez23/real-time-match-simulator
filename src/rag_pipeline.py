@@ -1,9 +1,8 @@
 """RAG pipeline for enriching match reports with local project documents.
 
-The preferred path mirrors the classroom practice: local documents are split,
-embedded with a sentence-transformers model, persisted in Chroma, and retrieved
-by semantic similarity. If those optional dependencies are missing, the module
-keeps the app usable through a small TF-IDF fallback.
+local documents are split, embedded with a sentence-transformers model, 
+persisted in Chroma, and retrieved by semantic similarity. If those optional 
+dependencies are missing, the module keeps the app usable through a small TF-IDF fallback.
 """
 
 from __future__ import annotations

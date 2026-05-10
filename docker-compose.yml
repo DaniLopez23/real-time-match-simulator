@@ -18,6 +18,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /tmp/kafka-logs
+    tmpfs:
+      - /tmp/kafka-logs:uid=1000,gid=1000,mode=1777
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
       interval: 10s
@@ -32,9 +35,12 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      streaming:
+        condition: service_started
     environment:
       KAFKA_BROKER: kafka:29092
       DATA_PATH: /app/data/static/events.json
+      EVENT_BATCH_SIZE: 5
       PYTHONUNBUFFERED: "1"
     volumes:
       - .:/app
@@ -51,10 +57,11 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_TOPIC: match_events
-      REPORT_WINDOW_MINUTES: 2
+      REPORT_WINDOW_MINUTES: 5
       SNAPSHOT_INTERVAL_SECONDS: 30
-      REPORT_GENERATION_ENABLED: "true"
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-45}
       PYTHONUNBUFFERED: "1"
     volumes:
       - .:/app
