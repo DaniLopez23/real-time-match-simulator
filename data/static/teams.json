@@ -1,0 +1,66 @@
+[
+  {
+    "team_id": "espanyol",
+    "name": "RCD Espanyol",
+    "short_name": "Espanyol",
+    "city": "Cornella de Llobregat",
+    "country": "Spain",
+    "stadium": {
+      "name": "Stage Front Stadium",
+      "capacity": 40500,
+      "surface": "natural grass"
+    },
+    "crest_url": "https://assets.laliga.com/assets/logos/ESP/ESP.png",
+    "primary_colors": ["blue", "white"],
+    "coach": "Manolo Gonzalez",
+    "captain": "Leandro Cabrera",
+    "injured_players_count": 4,
+    "injured_players_note": "Dato simulado para contexto del informe; no representa una lista medica oficial.",
+    "last_5_league_matches": "VDEDD",
+    "preferred_shape": "4-2-3-1",
+    "playing_style": "bloque compacto, salida directa y busqueda de transiciones por bandas",
+    "strengths": [
+      "defensa del area",
+      "juego aereo",
+      "transiciones rapidas",
+      "presion tras perdida en tramos cortos"
+    ],
+    "risks": [
+      "dificultad para sostener posesiones largas",
+      "dependencia de duelos defensivos",
+      "menor profundidad si hay bajas"
+    ]
+  },
+  {
+    "team_id": "real_madrid",
+    "name": "Real Madrid CF",
+    "short_name": "Real Madrid",
+    "city": "Madrid",
+    "country": "Spain",
+    "stadium": {
+      "name": "Santiago Bernabeu",
+      "capacity": 81044,
+      "surface": "natural grass"
+    },
+    "crest_url": "https://assets.laliga.com/assets/logos/RMA/RMA.png",
+    "primary_colors": ["white", "gold", "navy"],
+    "coach": "Carlo Ancelotti",
+    "captain": "Luka Modric",
+    "injured_players_count": 2,
+    "injured_players_note": "Dato simulado para contexto del informe; no representa una lista medica oficial.",
+    "last_5_league_matches": "VVVEV",
+    "preferred_shape": "4-3-1-2",
+    "playing_style": "posesion flexible, aceleraciones verticales y alta calidad en zonas de finalizacion",
+    "strengths": [
+      "circulacion de balon",
+      "eficacia en transiciones",
+      "calidad individual en ataque",
+      "gestion de ritmos"
+    ],
+    "risks": [
+      "espacios a la espalda tras perdida",
+      "tramos de menor presion si controla el marcador",
+      "exposicion en transiciones rivales"
+    ]
+  }
+]

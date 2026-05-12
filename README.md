@@ -1,129 +1,162 @@
-# Final Project - Real-Time Sports Analytics
+# Real-Time Match Simulator
 
-This project scaffolds a university final project for real-time football analytics using:
+Proyecto de analitica deportiva en tiempo real para simular, procesar y visualizar eventos de un partido de futbol. La arquitectura usa Kafka para ingesta, PySpark Structured Streaming para procesamiento, Parquet como capa de persistencia, Streamlit como dashboard y un flujo GenAI con agentes, tools, RAG y LLM local para generar reportes narrativos.
 
-- Apache Kafka for event ingestion
-- PySpark Structured Streaming for stream processing
-- Streamlit for live dashboards
-- LangGraph and RAG components for automated analysis and reporting
+## Objetivo
 
-## Quick Start
+El sistema toma eventos StatsBomb desde `data/static/events.json`, los publica de forma gradual en Kafka, los transforma en metricas deportivas en streaming y genera visualizaciones e informes incrementales. El resultado permite seguir el partido por eventos, comparar rendimiento entre equipos y obtener textos automaticos por ventanas de minutos.
 
-1. Install dependencies:
+## Componentes
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+- Kafka: bus de eventos en el topic `match_events`.
+- Kafka Producer: lee, filtra, normaliza y publica eventos StatsBomb.
+- PySpark Streaming: consume Kafka, valida eventos, calcula metricas y persiste snapshots Parquet.
+- GenAI reporting: detecta ventanas cerradas, crea contexto RAG, ejecuta agentes y redacta textos con Ollama.
+- Streamlit: muestra eventos, metricas, estado de ventanas, textos generados y descarga del PDF.
 
-2. Copy environment template and update values if needed:
+## Ejecucion con Docker
 
-   ```bash
-   cp .env.example .env
-   ```
+Requisitos:
 
-3. Run Kafka producer:
+- Docker y Docker Compose.
+- `data/static/events.json` disponible.
+- Ollama opcional si se quieren textos LLM reales; si no esta disponible, el proyecto genera fallbacks deterministas.
 
-   ```bash
-   python src/kafka_producer.py
-   ```
+Para usar Ollama en local:
 
-4. Run Spark streaming pipeline:
+```bash
+ollama pull llama3.2
+ollama serve
+```
 
-   ```bash
-   python src/streaming_pipeline.py
-   ```
+Levantar todo:
 
-5. Launch dashboard:
+```bash
+docker compose up --build
+```
 
-   ```bash
-   streamlit run src/app.py
-   ```
+Servicios levantados:
 
-## Notes
+- Kafka en `localhost:9092`.
+- Productor Kafka con broker interno `kafka:29092`.
+- Streaming Spark con broker interno `kafka:29092`.
+- Dashboard Streamlit en `http://localhost:8501`.
 
-- Place StatsBomb events at `data/static/events.json`.
-- Placeholder modules in `src/` are ready for incremental implementation.
+Parar:
 
-## Running with Docker
+```bash
+docker compose down
+```
 
-1. Make sure `data/static/events.json` exists.
-2. Build and start the Kafka broker, producer, and streaming job:
+El dashboard estara disponible en:
 
-   ```bash
-   docker compose up --build
-   ```
+```text
+http://localhost:8501
+```
 
-3. The compose file starts:
-   - Kafka broker in KRaft mode
-   - `src/kafka_producer.py` with `KAFKA_BROKER=kafka:29092`
-   - `src/streaming_pipeline.py` with `KAFKA_BROKER=kafka:29092`
-   - the Streamlit dashboard on `http://localhost:8501`
+## Ejecucion con .venv
 
-   Docker builds use service-specific images:
-   - producer: only Kafka producer dependencies (`confluent-kafka`, `python-dotenv`)
-   - streaming: Java 17 and pinned PySpark 3.5.1 for Kafka/Spark/parquet processing
-   - dashboard: only Streamlit plus parquet readers
+Requisitos:
 
-   To rebuild only one service after dependency changes:
+- Python 3.11 recomendado.
+- Java instalado para PySpark.
+- Kafka levantado en `localhost:9092`.
+- Ollama opcional para generacion LLM real.
 
-   ```bash
-   docker compose build producer
-   docker compose up producer
-   ```
+Crear entorno:
 
-   The producer filters the StatsBomb feed to Pressure, Duel, Interception,
-   Block, Clearance, Pass, Shot, Carry and Dribble events. It publishes them in
-   bursts of `EVENT_BATCH_SIZE=5` events, then waits a random 5-10 seconds
-   before the next burst.
+```bash
+python -m venv .venv
+```
 
-   The streaming service processes Kafka microbatches as soon as Spark receives
-   data. It keeps the live event store in memory and publishes a single
-   consolidated events parquet plus metric parquet snapshots every 30 seconds by
-   default. Change that interval with `SNAPSHOT_INTERVAL_SECONDS`. Spark does not
-   call LLM/RAG/PDF code inside microbatches.
+Activar en Windows PowerShell:
 
-   `REPORT_WINDOW_MINUTES=5` controls the match-minute window used for each
-   incremental report segment. Spark also calculates offensive/defensive
-   indexes, pass-success percentage and duel-success percentage for each team and
-   match-minute window. The streaming and dashboard images stay lightweight and
-   do not include LLM/RAG/PDF generation services.
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
 
-4. The streaming job stores consolidated parquet output in:
-   - `output/processed/events.parquet` for accumulated cleaned events
-   - `output/aggregates/team_metrics.parquet` for cumulative per-team metric snapshots
+Instalar dependencias:
 
-5. The dashboard report export only downloads `match_report.pdf` when it already exists. The PDF is built from existing artifacts:
-   - Spark parquet outputs for events, team metrics and window metrics
-   - incremental narrative segments every `REPORT_WINDOW_MINUTES` match minutes, stored in `output/reports/incremental_segments.parquet`
+```bash
+pip install -r docker/requirements-producer.txt
+pip install -r docker/requirements-streaming.txt
+pip install -r docker/requirements-dashboard.txt
+```
 
-   The streaming pipeline materializes pending narrative segments when it detects closed
-   match-minute windows and writes the RAG/LLM stages to the streaming console logs.
-   Make sure Ollama is running locally and the model is available:
+Copiar variables de entorno:
 
-   ```bash
-   ollama pull llama3.2
-   ollama serve
-   ```
+```bash
+cp .env.example .env
+```
 
-   The incremental report flow is:
-   - Spark writes consolidated events and per-window metrics to `output/report_windows/window_metrics.parquet`
-   - the streaming process detects closed 5-minute match windows and writes a textual RAG document to `output/reports/incremental_rag.parquet`
-   - the graph/tools/RAG/LLM flow generates one natural-language summary for that window
-   - Streamlit shows which windows are open, pending or already narrated
-   - each generated block is shown in the `Informe incremental` tab with its minute range, RAG/LLM stages and traceability
-   - the streaming process refreshes `output/reports/match_report.pdf` from the latest metrics and generated segment texts
-   - Streamlit does not call LLM/RAG or regenerate PDFs on demand
-   - the PDF export includes all generated blocks plus a window-activity chart and window metrics table
+En Windows PowerShell, si no tienes `cp`:
 
-6. If you want to run the scripts from the host instead of Docker, use `localhost:9092` as the broker.
+```powershell
+Copy-Item .env.example .env
+```
 
-7. To stop the stack:
+Arrancar Kafka. La opcion mas simple es usar solo el broker de Docker:
 
-   ```bash
-   docker compose down
-   ```
+```bash
+docker compose up kafka
+```
 
-Notes:
-- Kafka is exposed on `localhost:9092` for host-based clients.
-- Containers inside the compose network should use `kafka:29092`.
-- The streaming job downloads the Kafka connector JAR on first run and caches it in the container.
+En terminales separadas, ejecutar:
+
+```bash
+python src/kafka_producer.py
+```
+
+```bash
+python src/streaming_pipeline.py
+```
+
+```bash
+streamlit run src/app.py
+```
+
+Abrir:
+
+```text
+http://localhost:8501
+```
+
+## Variables importantes
+
+- `KAFKA_BROKER`: `localhost:9092` en host, `kafka:29092` en Docker.
+- `KAFKA_TOPIC`: topic de eventos, por defecto `match_events`.
+- `DATA_PATH`: ruta del JSON de eventos.
+- `MATCH_ID`: identificador del partido.
+- `EVENT_BATCH_SIZE`: eventos publicados por lote.
+- `SNAPSHOT_INTERVAL_SECONDS`: frecuencia de escritura de snapshots.
+- `REPORT_WINDOW_MINUTES`: tamano de ventana para reportes incrementales.
+- `LLM_PROVIDER`: actualmente `ollama`.
+- `OLLAMA_BASE_URL`: URL de Ollama.
+- `OLLAMA_MODEL`: modelo LLM, por defecto `llama3.2`.
+- `RAG_DOCS_PATH`: corpus documental local.
+- `RAG_CHROMA_DIR`: persistencia Chroma para RAG.
+
+## Salidas generadas
+
+El pipeline escribe en `output/`:
+
+- `output/processed/events.parquet`: eventos limpios acumulados.
+- `output/aggregates/team_metrics.parquet`: metricas acumuladas por equipo.
+- `output/report_windows/window_metrics.parquet`: metricas por ventanas de partido.
+- `output/reports/incremental_rag.parquet`: documentos RAG incrementales.
+- `output/reports/incremental_segments.parquet`: textos generados por ventana.
+- `output/reports/match_report.pdf`: informe PDF final.
+
+Al arrancar, el streaming limpia `output/`, por lo que cada ejecucion empieza desde cero.
+
+## Documentacion del proyecto
+
+- `ARCHITECTURE.md`: explica los nodos principales de infraestructura: Kafka, producer, streaming pipeline, Streamlit y GenAI reporting.
+- `FLOW.md`: describe el flujo de datos completo, desde el preprocesado del productor hasta la persistencia, generacion de reportes y visualizacion.
+- `GENAI_REPORT.md`: detalla paso a paso como se generan textos con agentes, tools, RAG incremental/documental y LLM.
+
+## Notas
+
+Streamlit no llama al LLM ni consume Kafka directamente. La app solo lee artefactos ya generados. La generacion textual ocurre dentro del proceso de streaming cuando hay ventanas cerradas pendientes.
+
+Si Ollama no esta disponible, el sistema continua funcionando y guarda un texto fallback para no bloquear los reportes.
