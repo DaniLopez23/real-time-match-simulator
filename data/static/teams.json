@@ -10,7 +10,7 @@
       "capacity": 40500,
       "surface": "natural grass"
     },
-    "crest_url": "https://assets.laliga.com/assets/logos/ESP/ESP.png",
+    "crest_url": "https://upload.wikimedia.org/wikipedia/en/d/d6/Rcd_espanyol_logo.svg",
     "primary_colors": ["blue", "white"],
     "coach": "Manolo Gonzalez",
     "captain": "Leandro Cabrera",
@@ -42,7 +42,7 @@
       "capacity": 81044,
       "surface": "natural grass"
     },
-    "crest_url": "https://assets.laliga.com/assets/logos/RMA/RMA.png",
+    "crest_url": "https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg",
     "primary_colors": ["white", "gold", "navy"],
     "coach": "Carlo Ancelotti",
     "captain": "Luka Modric",

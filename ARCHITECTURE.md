@@ -13,7 +13,6 @@ flowchart LR
     D --> F["output/aggregates/team_metrics.parquet"]
     D --> G["output/report_windows/window_metrics.parquet"]
     D --> H["GenAI incremental reports"]
-    H --> I["output/reports/incremental_rag.parquet"]
     H --> J["output/reports/incremental_segments.parquet"]
     H --> K["output/reports/match_report.pdf"]
     E --> L["Streamlit app"]
@@ -90,7 +89,6 @@ Salidas principales:
 - `output/aggregates/team_metrics.parquet`: historico de snapshots acumulados por equipo.
 - `output/report_windows/window_metrics.parquet`: metricas por ventanas de partido.
 - `output/checkpoints/snapshots`: checkpoint de Spark Structured Streaming.
-- `output/reports/incremental_rag.parquet`: documentos RAG generados por ventana.
 - `output/reports/incremental_segments.parquet`: textos narrativos generados.
 - `output/reports/match_report.pdf`: informe PDF compuesto desde artefactos ya persistidos.
 
@@ -141,7 +139,7 @@ Los componentes GenAI viven principalmente en:
 - `src/rag_pipeline.py`
 - `src/report_generator.py`
 
-El pipeline de streaming llama a `generate_missing_report_segments()` cuando hay ventanas cerradas. Esa funcion construye documentos RAG incrementales, ejecuta un workflow de agentes y guarda el texto resultante. Despues `report_generator.py` compone un PDF con metricas, graficos y textos ya persistidos.
+El pipeline de streaming llama a `generate_missing_report_segments()` cuando hay ventanas cerradas de `REPORT_WINDOW_MINUTES` minutos. Esa funcion calcula las metricas de la ventana, ejecuta un workflow simple de agentes (`metricas -> RAG -> redaccion`) y guarda el texto resultante. Despues `report_generator.py` compone un PDF con metricas, graficos y textos ya persistidos.
 
 El LLM configurado por defecto es Ollama con `llama3.2`. Si Ollama falla o no devuelve texto valido, el sistema guarda un fallback determinista para no bloquear el informe.
 

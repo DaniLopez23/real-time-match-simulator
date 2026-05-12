@@ -22,7 +22,7 @@ sequenceDiagram
     Spark->>Spark: parsea, valida, deduplica
     Spark->>Parquet: events, team_metrics, window_metrics
     Spark->>GenAI: ventanas cerradas pendientes
-    GenAI->>Parquet: incremental_rag, incremental_segments
+    GenAI->>Parquet: incremental_segments
     GenAI->>PDF: refresca match_report.pdf
     Parquet->>UI: lectura periodica
     PDF->>UI: descarga si existe
@@ -297,15 +297,13 @@ Esta funcion:
 1. Busca ventanas cerradas que aun no tengan texto.
 2. Genera como maximo una ventana pendiente por ciclo.
 3. Construye metricas y eventos representativos.
-4. Crea un documento RAG incremental.
-5. Ejecuta agentes y LLM.
-6. Guarda el segmento textual.
-7. Refresca el PDF final.
+4. Ejecuta agentes: metricas, RAG documental y redaccion.
+5. Guarda el segmento textual.
+6. Refresca el PDF final.
 
 Artefactos:
 
 ```text
-output/reports/incremental_rag.parquet
 output/reports/incremental_segments.parquet
 output/reports/match_report.pdf
 ```
@@ -314,20 +312,7 @@ Streamlit no genera estos artefactos. Solo los lee.
 
 ## 7. Como se persisten los reportes
 
-### 7.1 RAG incremental
-
-`incremental_rag.parquet` guarda un documento por ventana. Cada documento resume los datos de esa ventana en lenguaje estructurado.
-
-Columnas:
-
-- `doc_id`
-- `match_id`
-- `window_start_minute`
-- `window_end_minute`
-- `document_text`
-- `generated_at`
-
-### 7.2 Segmentos narrativos
+### 7.1 Segmentos narrativos
 
 `incremental_segments.parquet` guarda el texto final producido por el workflow.
 
@@ -345,7 +330,7 @@ Columnas:
 - `trace_json`
 - `generated_at`
 
-### 7.3 PDF
+### 7.2 PDF
 
 `match_report.pdf` se genera desde artefactos ya existentes. Incluye metricas, tablas, graficos y textos por ventana.
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from io import BytesIO
 from typing import Any
+from xml.sax.saxutils import escape
 
 import pandas as pd
 
@@ -12,9 +14,7 @@ from incremental_report import load_incremental_segments, load_window_metrics
 from settings import EVENTS_FILE, METRICS_FILE, REPORT_WINDOW_MINUTES
 
 try:
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
-    from reportlab.graphics.charts.linecharts import HorizontalLineChart
-    from reportlab.graphics.shapes import Drawing, String
+    from reportlab.graphics.shapes import Drawing, Line, Rect, String
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -52,7 +52,27 @@ CHART_COLORS = [
 
 def _clean_text(value: Any) -> str:
     """Convert values to PDF-safe plain text."""
-    return str(value).replace("\n", "<br/>")
+    raw_text = "".join(
+        char
+        for char in str(value)
+        if char in {"\n", "\r", "\t"} or ord(char) >= 32
+    )
+    escaped = escape(raw_text, {"'": "&apos;", '"': "&quot;"})
+    return escaped.replace("\n", "<br/>")
+
+
+def _safe_number(value: Any) -> float:
+    """Convert arbitrary metric values to finite floats for ReportLab drawings."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _series_max(series_list: list[list[float]]) -> float:
+    values = [max([_safe_number(value) for value in series], default=0.0) for series in series_list]
+    return max(values, default=0.0)
 
 
 def generate_report(metrics: dict, rag_context: str, workflow_output: dict) -> str:
@@ -83,7 +103,7 @@ def _add_segment_section(story: list, styles: dict, row: Any) -> None:
     story.append(Paragraph(_clean_text(row.text), styles["Body"]))
     source_text = (
         f"Fuente: datos de eventos y metricas Spark de la ventana {start}-{end}, "
-        "mas contexto RAG incremental construido con las ventanas procesadas. "
+        "mas contexto RAG documental recuperado por la tool del agente. "
         "El texto procede del flujo de agentes y LLM que resume los datos de esa ventana."
     )
     story.append(Paragraph(_clean_text(source_text), styles["Trace"]))
@@ -170,26 +190,41 @@ def _build_event_distribution_chart(metrics: dict[str, Any]) -> Drawing | None:
         return None
 
     drawing = Drawing(500, 230)
-    chart = VerticalBarChart()
-    chart.x = 42
-    chart.y = 42
-    chart.height = 130
-    chart.width = 420
-    chart.data = [
-        [float(team.get(column, 0)) for column, _ in EVENT_TYPE_METRICS]
-        for team in teams
-    ]
-    chart.categoryAxis.categoryNames = [label for _, label in EVENT_TYPE_METRICS]
-    chart.categoryAxis.labels.angle = 28
-    chart.categoryAxis.labels.fontSize = 6
-    chart.valueAxis.valueMin = 0
-    chart.valueAxis.valueMax = max(max(series) for series in chart.data) + 2
-    chart.valueAxis.valueStep = max(int(chart.valueAxis.valueMax // 4), 1)
-    for index, _team in enumerate(teams):
-        chart.bars[index].fillColor = _chart_color(index)
-    drawing.add(chart)
     drawing.add(String(42, 200, "Distribucion de eventos por equipo", fontName="Helvetica-Bold", fontSize=10))
-    for index, team in enumerate(teams):
+
+    data = [[_safe_number(team.get(column, 0)) for column, _ in EVENT_TYPE_METRICS] for team in teams]
+    max_value = max(_series_max(data), 1.0)
+    origin_x = 42
+    origin_y = 45
+    chart_width = 420
+    chart_height = 125
+    category_count = max(len(EVENT_TYPE_METRICS), 1)
+    team_count = max(len(teams), 1)
+    category_width = chart_width / category_count
+    bar_width = max(category_width / (team_count + 1), 3)
+
+    drawing.add(Line(origin_x, origin_y, origin_x + chart_width, origin_y, strokeColor=colors.HexColor("#667085")))
+    drawing.add(Line(origin_x, origin_y, origin_x, origin_y + chart_height, strokeColor=colors.HexColor("#667085")))
+
+    for metric_index, (_column, label) in enumerate(EVENT_TYPE_METRICS):
+        base_x = origin_x + metric_index * category_width
+        drawing.add(String(base_x + 2, origin_y - 14, label[:9], fontSize=5.5))
+        for team_index, series in enumerate(data):
+            value = series[metric_index] if metric_index < len(series) else 0.0
+            height = (value / max_value) * chart_height
+            x = base_x + 4 + team_index * bar_width
+            drawing.add(
+                Rect(
+                    x,
+                    origin_y,
+                    bar_width * 0.82,
+                    max(height, 0.5 if value > 0 else 0),
+                    fillColor=_chart_color(team_index),
+                    strokeColor=None,
+                )
+            )
+
+    for index, team in enumerate(teams[:3]):
         drawing.add(
             String(
                 42 + (index * 160),
@@ -202,29 +237,37 @@ def _build_event_distribution_chart(metrics: dict[str, Any]) -> Drawing | None:
     return drawing
 
 
-def _line_chart(
+def _add_manual_line_chart(
+    drawing: Drawing,
     data: list[list[float]],
     categories: list[str],
     x: int,
     y: int,
     width: int,
     height: int,
-) -> HorizontalLineChart:
-    chart = HorizontalLineChart()
-    chart.x = x
-    chart.y = y
-    chart.height = height
-    chart.width = width
-    chart.data = data
-    chart.categoryAxis.categoryNames = categories
-    chart.categoryAxis.labels.fontSize = 6
-    chart.valueAxis.valueMin = 0
-    chart.valueAxis.valueMax = max(max(series) for series in data) + 2 if data else 2
-    chart.valueAxis.valueStep = max(int(chart.valueAxis.valueMax // 4), 1)
-    for index in range(len(data)):
-        chart.lines[index].strokeColor = _chart_color(index)
-        chart.lines[index].strokeWidth = 1
-    return chart
+) -> None:
+    clean_data = [[_safe_number(value) for value in series] for series in data if series]
+    if not clean_data or not categories:
+        return
+
+    max_value = max(_series_max(clean_data), 1.0)
+    drawing.add(Line(x, y, x + width, y, strokeColor=colors.HexColor("#667085")))
+    drawing.add(Line(x, y, x, y + height, strokeColor=colors.HexColor("#667085")))
+
+    point_count = max(len(categories), 1)
+    x_step = width / max(point_count - 1, 1)
+    for index, label in enumerate(categories):
+        drawing.add(String(x + index * x_step - 2, y - 12, str(label), fontSize=5.5))
+
+    for series_index, series in enumerate(clean_data):
+        points: list[tuple[float, float]] = []
+        for index, value in enumerate(series[:point_count]):
+            px = x + index * x_step if point_count > 1 else x + width / 2
+            py = y + (value / max_value) * height
+            points.append((px, py))
+            drawing.add(Rect(px - 1.4, py - 1.4, 2.8, 2.8, fillColor=_chart_color(series_index), strokeColor=None))
+        for left, right in zip(points, points[1:]):
+            drawing.add(Line(left[0], left[1], right[0], right[1], strokeColor=_chart_color(series_index), strokeWidth=1.2))
 
 
 def _build_event_type_evolution_chart(window_metrics_df) -> Drawing | None:
@@ -262,7 +305,7 @@ def _build_event_type_evolution_chart(window_metrics_df) -> Drawing | None:
             continue
         y = drawing_height - 150 - (team_index * 155)
         drawing.add(String(42, y + 118, team, fontName="Helvetica-Bold", fontSize=9))
-        drawing.add(_line_chart(series, categories, 42, y, 410, 95))
+        _add_manual_line_chart(drawing, series, categories, 42, y, 410, 95)
 
     legend_y = 12
     for index, (_column, label) in enumerate(EVENT_TYPE_METRICS):
@@ -270,8 +313,8 @@ def _build_event_type_evolution_chart(window_metrics_df) -> Drawing | None:
     return drawing
 
 
-def _build_offensive_index_evolution_chart(window_metrics_df) -> Drawing | None:
-    if window_metrics_df.empty or "offensive_index" not in window_metrics_df.columns:
+def _build_index_evolution_chart(window_metrics_df, metric_column: str, title: str) -> Drawing | None:
+    if window_metrics_df.empty or metric_column not in window_metrics_df.columns:
         return None
 
     teams = sorted(window_metrics_df["team"].dropna().astype(str).unique())
@@ -286,15 +329,30 @@ def _build_offensive_index_evolution_chart(window_metrics_df) -> Drawing | None:
             .set_index("window_start_minute")
             .sort_index()
         )
-        data.append([float(team_df["offensive_index"].get(category, 0.0)) for category in categories])
+        data.append([float(team_df[metric_column].get(category, 0.0)) for category in categories])
 
     drawing = Drawing(500, 210)
-    drawing.add(String(42, 190, "Evolucion del indice ofensivo por equipo", fontName="Helvetica-Bold", fontSize=10))
-    chart = _line_chart(data, [str(value) for value in categories], 42, 45, 410, 120)
-    drawing.add(chart)
+    drawing.add(String(42, 190, title, fontName="Helvetica-Bold", fontSize=10))
+    _add_manual_line_chart(drawing, data, [str(value) for value in categories], 42, 45, 410, 120)
     for index, team in enumerate(teams):
         drawing.add(String(42 + (index * 160), 20, team, fontSize=8, fillColor=_chart_color(index)))
     return drawing
+
+
+def _build_offensive_index_evolution_chart(window_metrics_df) -> Drawing | None:
+    return _build_index_evolution_chart(
+        window_metrics_df,
+        "offensive_index",
+        "Evolucion del indice ofensivo por equipo",
+    )
+
+
+def _build_defensive_index_evolution_chart(window_metrics_df) -> Drawing | None:
+    return _build_index_evolution_chart(
+        window_metrics_df,
+        "defensive_index",
+        "Evolucion del indice defensivo por equipo",
+    )
 
 
 def _read_parquet(path) -> pd.DataFrame:
@@ -444,7 +502,7 @@ def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
         "used_langgraph": False,
         "trace": [
             "El PDF no lo genera el agente: compone metricas, graficas y textos ya existentes.",
-            "Los textos de cada intervalo si proceden del flujo previo de agentes, RAG incremental y LLM.",
+            "Los textos de cada intervalo si proceden del flujo previo de agentes, RAG documental y LLM.",
         ],
     }
 
@@ -550,7 +608,13 @@ def generate_pdf_report(include_incremental: bool = True) -> tuple[bytes, dict]:
             story.append(offensive_chart)
             story.append(Spacer(1, 0.3 * cm))
 
-    _add_section(story, styles, "8. Justificacion", "<br/>".join(workflow_output.get("trace", [])))
+        defensive_chart = _build_defensive_index_evolution_chart(window_metrics_df)
+        if defensive_chart is not None:
+            story.append(Paragraph("8. Evolucion del indice defensivo", styles["SectionTitle"]))
+            story.append(defensive_chart)
+            story.append(Spacer(1, 0.3 * cm))
+
+    _add_section(story, styles, "9. Justificacion", "<br/>".join(workflow_output.get("trace", [])))
 
     doc.build(story)
     return buffer.getvalue(), workflow_output

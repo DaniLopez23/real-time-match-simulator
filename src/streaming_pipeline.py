@@ -13,6 +13,7 @@ import os
 import shutil
 import socket
 import sys
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -254,6 +255,7 @@ def _generate_incremental_reports(snapshot_time: str) -> None:
     """Generate missing narrative segments for closed match-minute windows."""
     try:
         from incremental_report import generate_missing_report_segments
+        from incremental_report import load_incremental_segments
         from report_generator import generate_pdf_report
         from settings import REPORT_PDF_FILE
 
@@ -264,7 +266,10 @@ def _generate_incremental_reports(snapshot_time: str) -> None:
         )
         if not generated_rows:
             print("     [REPORT] No new narrative segment generated.", flush=True)
-            return
+            existing_segments = load_incremental_segments()
+            if existing_segments.empty or REPORT_PDF_FILE.exists():
+                return
+            print("     [REPORT] Existing segments found but PDF is missing; refreshing PDF.", flush=True)
 
         for row in generated_rows:
             print(
@@ -284,6 +289,7 @@ def _generate_incremental_reports(snapshot_time: str) -> None:
             print(f"     [REPORT] PDF refreshed from latest generated segments: {REPORT_PDF_FILE}", flush=True)
         except Exception as pdf_exc:  # noqa: BLE001
             print(f"     [REPORT][PDF] Could not refresh PDF report: {pdf_exc}", flush=True)
+            print(traceback.format_exc(), flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"     [REPORT][ERROR] Incremental text generation failed: {exc}", flush=True)
 

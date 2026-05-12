@@ -11,7 +11,7 @@ El sistema toma eventos StatsBomb desde `data/static/events.json`, los publica d
 - Kafka: bus de eventos en el topic `match_events`.
 - Kafka Producer: lee, filtra, normaliza y publica eventos StatsBomb.
 - PySpark Streaming: consume Kafka, valida eventos, calcula metricas y persiste snapshots Parquet.
-- GenAI reporting: detecta ventanas cerradas, crea contexto RAG, ejecuta agentes y redacta textos con Ollama.
+- GenAI reporting: cada 5 minutos de partido, detecta ventanas cerradas, usa tools de metricas/RAG y redacta textos con Ollama.
 - Streamlit: muestra eventos, metricas, estado de ventanas, textos generados y descarga del PDF.
 
 ## Ejecucion con Docker
@@ -143,7 +143,6 @@ El pipeline escribe en `output/`:
 - `output/processed/events.parquet`: eventos limpios acumulados.
 - `output/aggregates/team_metrics.parquet`: metricas acumuladas por equipo.
 - `output/report_windows/window_metrics.parquet`: metricas por ventanas de partido.
-- `output/reports/incremental_rag.parquet`: documentos RAG incrementales.
 - `output/reports/incremental_segments.parquet`: textos generados por ventana.
 - `output/reports/match_report.pdf`: informe PDF final.
 
@@ -153,7 +152,7 @@ Al arrancar, el streaming limpia `output/`, por lo que cada ejecucion empieza de
 
 - `ARCHITECTURE.md`: explica los nodos principales de infraestructura: Kafka, producer, streaming pipeline, Streamlit y GenAI reporting.
 - `FLOW.md`: describe el flujo de datos completo, desde el preprocesado del productor hasta la persistencia, generacion de reportes y visualizacion.
-- `GENAI_REPORT.md`: detalla paso a paso como se generan textos con agentes, tools, RAG incremental/documental y LLM.
+- `GENAI_REPORT.md`: detalla paso a paso como se generan textos cada 5 minutos con agentes, tools, RAG documental y LLM.
 
 ## Notas
 
