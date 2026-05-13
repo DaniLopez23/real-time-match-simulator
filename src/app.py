@@ -48,6 +48,7 @@ MATCH_FILE = PROJECT_ROOT / "data" / "static" / "match.json"
 TEAMS_FILE = PROJECT_ROOT / "data" / "static" / "teams.json"
 
 EVENT_COLUMNS = [
+    "schema_version",
     "event_id",
     "timestamp",
     "match_id",
@@ -58,7 +59,6 @@ EVENT_COLUMNS = [
     "minute",
     "second",
     "outcome",
-    "value",
     "period",
     "snapshot_time",
     "batch_id",
@@ -116,7 +116,6 @@ METRIC_COLUMNS = [
     "recoveries",
     "offensive_index",
     "defensive_index",
-    "avg_value",
     "snapshot_time",
     "batch_id",
     "snapshot_event_count",
@@ -148,7 +147,6 @@ WINDOW_METRIC_COLUMNS = [
     "recoveries",
     "offensive_index",
     "defensive_index",
-    "avg_value",
     "snapshot_time",
     "batch_id",
     "window_minutes",
@@ -303,10 +301,9 @@ def _team_goal_count(events_df: pd.DataFrame, team_name: str) -> int:
     team_norm = events_df["team"].fillna("").astype(str).map(_norm_text)
     event_type = events_df["event_type"].fillna("").astype(str).str.lower()
     outcome = events_df["outcome"].fillna("").astype(str).str.lower()
-    value = pd.to_numeric(events_df["value"], errors="coerce").fillna(0)
     target = _norm_text(team_name)
     team_matches = team_norm.map(lambda name: bool(target) and (name == target or target in name or name in target))
-    goals = team_matches & (event_type == "shot") & ((outcome == "goal") | (value == 3))
+    goals = team_matches & (event_type == "shot") & (outcome == "goal")
     return int(goals.sum())
 
 
@@ -460,7 +457,7 @@ def load_window_metrics() -> pd.DataFrame:
         "recoveries",
         "batch_id",
     ]
-    float_columns = ["pass_success_pct", "duel_success_pct", "offensive_index", "defensive_index", "avg_value"]
+    float_columns = ["pass_success_pct", "duel_success_pct", "offensive_index", "defensive_index"]
     for column in int_columns:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
@@ -479,8 +476,8 @@ def load_processed_events() -> pd.DataFrame:
 
     df["minute"] = pd.to_numeric(df["minute"], errors="coerce").fillna(0).astype(int)
     df["second"] = pd.to_numeric(df["second"], errors="coerce").fillna(0).astype(int)
-    df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0).astype(int)
     df["period"] = pd.to_numeric(df["period"], errors="coerce").fillna(0).astype(int)
+    df["schema_version"] = df["schema_version"].fillna("legacy").astype(str)
     df["snapshot_time"] = pd.to_datetime(df["snapshot_time"], errors="coerce")
     df["match_time"] = df.apply(lambda row: f"{int(row['minute']):02d}:{int(row['second']):02d}", axis=1)
     return df
@@ -513,7 +510,7 @@ def load_team_metrics() -> pd.DataFrame:
         "batch_id",
         "snapshot_event_count",
     ]
-    float_cols = ["pass_success_pct", "duel_success_pct", "offensive_index", "defensive_index", "avg_value"]
+    float_cols = ["pass_success_pct", "duel_success_pct", "offensive_index", "defensive_index"]
     for column in count_cols:
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
     df[count_cols] = df[count_cols].astype(int)
@@ -661,7 +658,7 @@ def _filter_events_for_table(events_df: pd.DataFrame) -> pd.DataFrame:
 def _render_paginated_events_table(events_df: pd.DataFrame) -> None:
     """Render all filtered events with manual pagination of 50 rows."""
     st.subheader("Tabla de eventos")
-    display_cols = ["match_time", "team", "player", "event_type", "outcome", "zone", "value"]
+    display_cols = ["match_time", "team", "player", "event_type", "outcome", "zone", "schema_version"]
     available_cols = [column for column in display_cols if column in events_df.columns]
 
     if events_df.empty:

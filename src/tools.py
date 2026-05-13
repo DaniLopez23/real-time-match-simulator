@@ -45,7 +45,8 @@ def _load_events() -> pd.DataFrame:
     if df.empty:
         return df
     df["minute"] = pd.to_numeric(df.get("minute"), errors="coerce").fillna(0).astype(int)
-    df["value"] = pd.to_numeric(df.get("value"), errors="coerce").fillna(0).astype(int)
+    df["schema_version"] = df.get("schema_version", "legacy")
+    df["schema_version"] = df["schema_version"].fillna("legacy").astype(str)
     df["event_type_norm"] = df["event_type"].astype(str).str.lower() if "event_type" in df.columns else ""
     df["outcome_norm"] = df["outcome"].astype(str).str.lower() if "outcome" in df.columns else ""
     return df

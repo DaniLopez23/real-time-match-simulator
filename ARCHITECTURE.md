@@ -44,13 +44,13 @@ Responsabilidades:
 - Lee `data/static/events.json` o la ruta configurada en `DATA_PATH`.
 - Ordena los eventos por el campo `index` para conservar la cronologia del partido.
 - Filtra solo eventos utiles para el analisis: `Pressure`, `Duel`, `Interception`, `Block`, `Clearance`, `Pass`, `Shot`, `Carry` y `Dribble`.
-- Aplana cada evento a un esquema comun: `event_id`, `timestamp`, `match_id`, `team`, `player`, `event_type`, `zone`, `minute`, `second`, `outcome`, `value`, `period`.
+- Aplana cada evento a un esquema comun: `schema_version`, `event_id`, `timestamp`, `match_id`, `team`, `player`, `event_type`, `zone`, `minute`, `second`, `outcome`, `period`.
 - Calcula la zona del campo en una matriz 3x3 usando coordenadas StatsBomb.
 - Normaliza resultados:
   - tiros: `GOAL`, `ON_TARGET`, `BLOCKED`, `OFF_TARGET`, `UNKNOWN`;
   - acciones binarias: `SUCCESS` o `FAIL`.
 - Infere presiones exitosas si hay recuperacion del mismo equipo dentro de una ventana de 5 segundos o mediante eventos relacionados.
-- Asigna `value`: tiros valen mas segun impacto; acciones binarias valen 1 si son exitosas y 0 si fallan.
+- Versiona el contrato con `schema_version="1.0"` y usa `outcome` como fuente de verdad para goles, exitos y fallos.
 - Publica a Kafka en lotes de `EVENT_BATCH_SIZE`, con pausa aleatoria entre `MIN_SLEEP_SECONDS` y `MAX_SLEEP_SECONDS`.
 
 Variables relevantes:

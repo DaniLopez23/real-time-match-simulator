@@ -25,6 +25,7 @@ KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 DATA_PATH = Path(os.getenv("DATA_PATH", "data/static/events.json"))
 MATCH_ID = os.getenv("MATCH_ID", "3946454")
 TOPIC_NAME = "match_events"
+SCHEMA_VERSION = "1.0"
 EVENT_BATCH_SIZE = max(1, int(os.getenv("EVENT_BATCH_SIZE", "5")))
 MIN_SLEEP_SECONDS = float(os.getenv("MIN_SLEEP_SECONDS", "5"))
 MAX_SLEEP_SECONDS = float(os.getenv("MAX_SLEEP_SECONDS", "10"))
@@ -250,18 +251,6 @@ def map_outcome(
     return map_binary_outcome(event, event_lookup, pressure_success_ids)
 
 
-def compute_event_value(event_type: str, outcome: str) -> int:
-    """Assign a numeric value by event type and outcome rules."""
-    if event_type == "Shot":
-        if outcome == "GOAL":
-            return 3
-        if outcome == "ON_TARGET":
-            return 2
-        return 1
-
-    return 1 if outcome == "SUCCESS" else 0
-
-
 def map_event(
     event: Dict[str, Any],
     event_lookup: Dict[str, Dict[str, Any]],
@@ -274,6 +263,7 @@ def map_event(
     outcome = map_outcome(event, event_lookup, pressure_success_ids)
 
     mapped = {
+        "schema_version": SCHEMA_VERSION,
         "event_id": event.get("id"),
         "timestamp": event.get("timestamp"),
         "match_id": MATCH_ID,
@@ -284,7 +274,6 @@ def map_event(
         "minute": safe_int(event.get("minute")),
         "second": safe_int(event.get("second")),
         "outcome": outcome,
-        "value": compute_event_value(event_type, outcome),
         "period": safe_int(event.get("period")),
     }
     return mapped

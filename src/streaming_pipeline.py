@@ -26,7 +26,7 @@ if sys.platform == "win32" and "HADOOP_HOME" not in os.environ:
 
 import pyspark
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.functions import avg, col, count, floor, from_json, lit, lower, round as spark_round, sum as spark_sum, when
+from pyspark.sql.functions import col, count, floor, from_json, lit, lower, round as spark_round, sum as spark_sum, when
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 _stats = {"total_events": 0, "batches_with_events": 0}
@@ -143,7 +143,6 @@ def _metric_aggregations(total_alias: str) -> list:
         count(when(event_type_lower == "ball recovery", 1)).alias("recoveries"),
         spark_round(spark_sum(offensive_score), 2).alias("offensive_index"),
         spark_round(spark_sum(defensive_score), 2).alias("defensive_index"),
-        spark_round(avg(col("value")), 2).alias("avg_value"),
     ]
 
 
@@ -432,6 +431,7 @@ def main() -> None:
 
     event_schema = StructType(
         [
+            StructField("schema_version", StringType(), True),
             StructField("event_id", StringType(), True),
             StructField("timestamp", StringType(), True),
             StructField("match_id", StringType(), True),
@@ -442,7 +442,6 @@ def main() -> None:
             StructField("minute", IntegerType(), True),
             StructField("second", IntegerType(), True),
             StructField("outcome", StringType(), True),
-            StructField("value", IntegerType(), True),
             StructField("period", IntegerType(), True),
         ]
     )

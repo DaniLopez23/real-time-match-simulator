@@ -102,7 +102,7 @@ def _normalize_events(events_df: pd.DataFrame) -> pd.DataFrame:
 
     df["minute"] = pd.to_numeric(col_or_default("minute", 0), errors="coerce").fillna(0).astype(int)
     df["second"] = pd.to_numeric(col_or_default("second", 0), errors="coerce").fillna(0).astype(int)
-    df["value"] = pd.to_numeric(col_or_default("value", 0), errors="coerce").fillna(0).astype(int)
+    df["schema_version"] = col_or_default("schema_version", "legacy").fillna("legacy").astype(str)
     df["event_type_norm"] = col_or_default("event_type", "").astype(str).str.lower()
     df["outcome_norm"] = col_or_default("outcome", "").astype(str).str.lower()
     df["match_id"] = col_or_default("match_id", "").astype(str)
@@ -127,7 +127,7 @@ def _team_metrics(events_df: pd.DataFrame) -> list[dict[str, Any]]:
         successful_duels = int(((event_type == "duel") & (outcome == "success")).sum())
         pressures = int((event_type == "pressure").sum())
         shots = int((event_type == "shot").sum())
-        goals = int(((event_type == "shot") & ((outcome == "goal") | (team_df["value"] == 3))).sum())
+        goals = int(((event_type == "shot") & (outcome == "goal")).sum())
         rows.append(
             {
                 "team": str(team),
@@ -160,7 +160,7 @@ def _highlighted_player(events_df: pd.DataFrame) -> dict[str, Any]:
                 "team": str(team),
                 "events": int(len(player_df)),
                 "shots": int((event_type == "shot").sum()),
-                "goals": int(((event_type == "shot") & ((player_df["outcome_norm"] == "goal") | (player_df["value"] == 3))).sum()),
+                "goals": int(((event_type == "shot") & (player_df["outcome_norm"] == "goal")).sum()),
             }
         )
     return sorted(rows, key=lambda item: (-item["goals"], -item["shots"], -item["events"]))[0] if rows else {}
@@ -181,7 +181,7 @@ def _window_metrics(events_df: pd.DataFrame, match_id: str, start: int, end: int
         "window_minutes": end - start,
         "total_events": int(len(window_df)),
         "total_shots": int((event_type == "shot").sum()) if not window_df.empty else 0,
-        "total_goals": int(((event_type == "shot") & ((outcome == "goal") | (window_df["value"] == 3))).sum()) if not window_df.empty else 0,
+        "total_goals": int(((event_type == "shot") & (outcome == "goal")).sum()) if not window_df.empty else 0,
         "total_pressures": int((event_type == "pressure").sum()) if not window_df.empty else 0,
         "teams": teams,
         "highlighted_player": _highlighted_player(window_df),
@@ -194,11 +194,11 @@ def _window_metrics(events_df: pd.DataFrame, match_id: str, start: int, end: int
         "up_to_minute": end,
         "total_events": int(len(cumulative_df)),
         "total_shots": int((cumulative_type == "shot").sum()) if not cumulative_df.empty else 0,
-        "total_goals": int(((cumulative_type == "shot") & ((cumulative_outcome == "goal") | (cumulative_df["value"] == 3))).sum()) if not cumulative_df.empty else 0,
+        "total_goals": int(((cumulative_type == "shot") & (cumulative_outcome == "goal")).sum()) if not cumulative_df.empty else 0,
         "teams": _team_metrics(cumulative_df),
     }
 
-    event_cols = ["timestamp", "minute", "second", "team", "player", "event_type", "outcome", "zone", "value"]
+    event_cols = ["schema_version", "timestamp", "minute", "second", "team", "player", "event_type", "outcome", "zone"]
     available_cols = [column for column in event_cols if column in window_df.columns]
     sort_cols = [column for column in ["minute", "second", "timestamp"] if column in window_df.columns]
     sorted_df = window_df.sort_values(sort_cols, na_position="last") if sort_cols else window_df
@@ -355,7 +355,6 @@ def load_window_metrics() -> pd.DataFrame:
         "recoveries",
         "offensive_index",
         "defensive_index",
-        "avg_value",
         "batch_id",
         "window_minutes",
     ]

@@ -16,7 +16,7 @@ sequenceDiagram
     participant UI as Streamlit
 
     JSON->>Producer: carga y ordena eventos
-    Producer->>Producer: filtra, normaliza, calcula outcome/value/zone
+    Producer->>Producer: filtra, normaliza, calcula outcome/zone y versiona esquema
     Producer->>Kafka: publica lotes JSON
     Kafka->>Spark: stream de eventos
     Spark->>Spark: parsea, valida, deduplica
@@ -80,6 +80,7 @@ Cada evento queda en este formato:
 
 ```text
 event_id
+schema_version
 timestamp
 match_id
 team
@@ -89,7 +90,6 @@ zone
 minute
 second
 outcome
-value
 period
 ```
 
@@ -126,15 +126,9 @@ Para eventos binarios:
 - carries relacionados con `Dispossessed` o `Miscontrol` -> `FAIL`;
 - presiones exitosas si hay recuperacion posterior o relacionada del mismo equipo.
 
-### 2.6 Calculo de value
+### 2.6 Versionado del contrato
 
-`compute_event_value()` asigna:
-
-- gol: 3;
-- tiro a puerta: 2;
-- otro tiro: 1;
-- accion binaria exitosa: 1;
-- accion binaria fallida: 0.
+Cada evento incluye `schema_version="1.0"`. El campo `outcome` es la fuente de verdad para interpretar goles, acciones exitosas y acciones fallidas. El contrato ya no publica `value`.
 
 ### 2.7 Publicacion simulada
 
@@ -430,6 +424,7 @@ El contrato mas importante entre servicios es el esquema JSON publicado por el p
 
 ```text
 event_id: string
+schema_version: string
 timestamp: string
 match_id: string
 team: string
@@ -439,7 +434,6 @@ zone: string
 minute: int
 second: int
 outcome: string
-value: int
 period: int
 ```
 
