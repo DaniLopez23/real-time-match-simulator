@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, TypedDict
 
-from tools import retrieve_document_context
+from tools import query_match_metrics, retrieve_document_context
 
 try:
     from dotenv import load_dotenv
@@ -46,6 +46,8 @@ class WindowReportState(TypedDict, total=False):
     window_metrics: dict[str, Any]
     window_events: list[dict[str, Any]]
     cumulative_metrics: dict[str, Any]
+    match_metrics: dict[str, Any]
+    match_metrics_json: str
     rag_query: str
     rag_context: str
     final_prompt: str
@@ -75,12 +77,72 @@ def _emit_progress(
         pass
 
 
+def _compact_match_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the match-level fields useful for the window writer."""
+    highlighted_team = metrics.get("highlighted_team", {}) or {}
+    defensive_team = metrics.get("team_with_highest_defensive_index", {}) or {}
+    highlighted_player = metrics.get("highlighted_player", {}) or {}
+    intensity = metrics.get("highest_intensity_interval", {}) or {}
+    return {
+        "status": metrics.get("status"),
+        "total_events": metrics.get("total_events", 0),
+        "total_shots": metrics.get("total_shots", 0),
+        "total_goals": metrics.get("total_goals", 0),
+        "total_passes": metrics.get("total_passes", 0),
+        "pass_success_pct": metrics.get("pass_success_pct", 0),
+        "total_duels": metrics.get("total_duels", 0),
+        "duel_success_pct": metrics.get("duel_success_pct", 0),
+        "highlighted_team": {
+            "team": highlighted_team.get("team", "N/D"),
+            "offensive_index": highlighted_team.get("offensive_index", 0),
+            "goals": highlighted_team.get("goals", 0),
+            "shots": highlighted_team.get("shots", 0),
+        },
+        "defensive_team": {
+            "team": defensive_team.get("team", "N/D"),
+            "defensive_index": defensive_team.get("defensive_index", 0),
+        },
+        "highlighted_player": {
+            "player": highlighted_player.get("player", "N/D"),
+            "team": highlighted_player.get("team", "N/D"),
+            "participations": highlighted_player.get("participations", 0),
+            "shots": highlighted_player.get("shots", 0),
+            "goals": highlighted_player.get("goals", 0),
+        },
+        "highest_intensity_interval": {
+            "interval": intensity.get("interval", "N/D"),
+            "events": intensity.get("events", 0),
+            "shots": intensity.get("shots", 0),
+        },
+    }
+
+
 def metrics_agent_node(state: WindowReportState) -> WindowReportState:
-    """Use window metrics to prepare the query for RAG."""
+    """Use window metrics and the metrics tool to prepare the query for RAG."""
     metrics = state.get("window_metrics", {})
     teams = metrics.get("teams", [])
     activity_team = max(teams, key=lambda item: item.get("events", 0), default={})
     pressure_team = max(teams, key=lambda item: item.get("pressures", 0), default={})
+    tool_query = (
+        "metricas agregadas del partido: tiros, goles, pases, duelos, "
+        "equipo destacado, jugador destacado e intervalo de mayor intensidad"
+    )
+    try:
+        match_metrics_json = (
+            query_match_metrics.invoke(tool_query)
+            if hasattr(query_match_metrics, "invoke")
+            else query_match_metrics(tool_query)
+        )
+        match_metrics = _compact_match_metrics(json.loads(match_metrics_json))
+        tool_trace = "Tool query_match_metrics ejecutada para metricas agregadas del partido."
+    except Exception as exc:  # noqa: BLE001
+        match_metrics = {"status": "error", "message": str(exc)}
+        tool_trace = f"Tool query_match_metrics no disponible: {exc}"
+    match_metrics_json = json.dumps(match_metrics, ensure_ascii=False, default=str)
+
+    highlighted_team = match_metrics.get("highlighted_team", {}).get("team", "N/D")
+    highlighted_player = match_metrics.get("highlighted_player", {}).get("player", "N/D")
+    intensity = match_metrics.get("highest_intensity_interval", {}).get("interval", "N/D")
 
     query = (
         "interpretacion futbolistica de ventana de partido: "
@@ -90,14 +152,22 @@ def metrics_agent_node(state: WindowReportState) -> WindowReportState:
         f"{metrics.get('total_pressures', 0)} presiones, "
         f"equipo mas activo {activity_team.get('team', 'N/D')}, "
         f"equipo con mas presion {pressure_team.get('team', 'N/D')}, "
+        f"equipo destacado acumulado {highlighted_team}, "
+        f"jugador destacado acumulado {highlighted_player}, "
+        f"mayor intensidad acumulada {intensity}, "
         "intensidad, posesion, presion, rendimiento y redaccion para stakeholder"
     )
 
     _emit_progress(state, "metricas", "Metricas de la ventana preparadas para RAG.", {"query": query})
     return {
         **state,
+        "match_metrics": match_metrics,
+        "match_metrics_json": match_metrics_json,
         "rag_query": query,
-        "trace": _append_trace(state, "Agente de metricas preparo la consulta RAG de la ventana."),
+        "trace": [
+            *_append_trace(state, "Agente de metricas preparo la consulta RAG de la ventana."),
+            tool_trace,
+        ],
     }
 
 
@@ -131,11 +201,18 @@ def writer_agent_node(state: WindowReportState) -> WindowReportState:
     end = state.get("window_end_minute", 0)
     prompt = (
         f"Redacta un fragmento de informe para los minutos {start}-{end}.\n"
-        "Debe tener entre 80 y 130 palabras, empezar con el rango de minutos, "
-        "usar solo las metricas/eventos dados y apoyarse en el RAG sin inventar.\n\n"
+        "Debe tener exactamente dos parrafos:\n"
+        f"1. Parrafo 'Ventana {start}-{end}': describe SOLO lo ocurrido en esa ventana usando "
+        "METRICAS DE LA VENTANA y EVENTOS REPRESENTATIVOS. No mezcles aqui datos acumulados.\n"
+        "2. Parrafo 'Acumulado del partido': resume SOLO la informacion acumulada usando "
+        "METRICAS ACUMULADAS y METRICAS AGREGADAS DEL PARTIDO.\n"
+        "Cada parrafo debe tener 45-80 palabras. Usa texto natural, sin JSON ni listas. "
+        "Puedes apoyarte en el RAG para interpretar, pero no inventes.\n\n"
         f"METRICAS DE LA VENTANA:\n{json.dumps(state.get('window_metrics', {}), ensure_ascii=False, default=str)}\n\n"
         f"EVENTOS REPRESENTATIVOS:\n{json.dumps(state.get('window_events', []), ensure_ascii=False, default=str)}\n\n"
         f"METRICAS ACUMULADAS:\n{json.dumps(state.get('cumulative_metrics', {}), ensure_ascii=False, default=str)}\n\n"
+        f"METRICAS AGREGADAS DEL PARTIDO DESDE TOOL query_match_metrics:\n"
+        f"{json.dumps(state.get('match_metrics', {}), ensure_ascii=False, default=str)}\n\n"
         f"CONTEXTO RAG:\n{state.get('rag_context', '')}"
     )
 
@@ -161,7 +238,7 @@ def _invoke_text_llm(prompt: str) -> tuple[str, str]:
 
     model_name = os.getenv("OLLAMA_MODEL", "llama3.2")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "45"))
+    timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
     max_retries = max(1, int(os.getenv("LLM_MAX_RETRIES", "2")))
     backoff_seconds = float(os.getenv("LLM_RETRY_BACKOFF_SECONDS", "2"))
 
@@ -217,7 +294,9 @@ def _call_ollama(
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            f"Ollama no respondio correctamente. Revisa `ollama serve` y `ollama pull {model_name}`."
+            "Ollama no respondio correctamente "
+            f"(base_url={base_url}, modelo={model_name}, causa={type(exc).__name__}: {exc}). "
+            f"Revisa `ollama serve` y `ollama pull {model_name}`."
         ) from exc
 
     content = (payload.get("message") or {}).get("content")
@@ -234,12 +313,14 @@ def _fallback_text(state: WindowReportState, reason: str) -> tuple[str, str]:
     teams = metrics.get("teams", [])
     leader = max(teams, key=lambda item: item.get("events", 0), default={})
     text = (
-        f"Minutos {start}-{end}: en esta ventana se registraron "
+        f"Ventana {start}-{end}: en esta ventana se registraron "
         f"{metrics.get('total_events', 0)} eventos, {metrics.get('total_shots', 0)} tiros, "
         f"{metrics.get('total_goals', 0)} goles y {metrics.get('total_pressures', 0)} presiones. "
         f"El equipo con mas actividad fue {leader.get('team', 'N/D')}. "
-        "El resumen procede de las metricas calculadas para la ventana y del contexto RAG disponible. "
-        f"No se pudo usar el LLM principal, por lo que se genero este texto de respaldo. Motivo: {reason}"
+        "Este parrafo usa solo las metricas calculadas para el tramo y el contexto RAG disponible.\n\n"
+        "Acumulado del partido: el resumen acumulado esta disponible en las metricas generales del flujo, "
+        "pero no se pudo usar el LLM principal para redactarlo con detalle. "
+        f"Se genero este texto de respaldo. Motivo: {reason}"
     )
     return text, f"fallback:{reason}"
 
